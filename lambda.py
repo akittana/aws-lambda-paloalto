@@ -31,76 +31,77 @@ def lambda_handler(event, context):
 		contents = f.read()
     
 	# Parse the file as json 
-	j = json.loads(contents)
+	logs = json.loads(contents)
 	
-	# Search the log file for events that match 'StartInstances','AuthorizeSecurityGroupIngress',..
-	for i in j['Records']:
-		if i['eventName'] == 'StartInstances':
-			rules_to_be_added = event_StartInstance(i,igwId) # Parse instance details to retrieve new rules to be added
-			for m in rules_to_be_added:
-				params = aws_rules_to_pa(pa_ip,pa_key,m) # convert the format of the rules to Palo Alto gateway fields
-				params['srcZone'] = pa_zone_untrust
-				params['dstZone'] = pa_zone_trust				
-				params['dstPort'] = str(m['dstPort'])
-				result = paloalto.paloalto_find_matchingrule(pa_ip,pa_key,params)
+	# Iterate through the records for events that match 'StartInstances','AuthorizeSecurityGroupIngress',..
+	for record in logs['Records']:
+		if record['eventName'] == 'StartInstances':
+			rules_to_be_added = event_StartInstance(record,igwId) # Parse instance details to retrieve new rules to be added
+			for rule in rules_to_be_added:
+				pa_rule = aws_rules_to_pa(pa_ip,pa_key,rule) # convert the format of the rules to Palo Alto gateway fields
+				pa_rule['srcZone'] = pa_zone_untrust
+				pa_rule['dstZone'] = pa_zone_trust				
+				pa_rule['dstPort'] = str(rule['dstPort'])
+				matching_rules = paloalto.paloalto_find_matchingrule(pa_ip,pa_key,pa_rule) # find if there are already rules that correspond to the same parameters
 				current_policy_action = ""
-				if len(result) != 0:
-					for rulename in result:
+				if len(matching_rules) != 0: 
+					for rulename in matching_rules:
 						matching_rule_details = paloalto.paloalto_rule_getdetails(pa_ip,pa_key,rulename)
 						if matching_rule_details['action'] == "deny": #if we encounter one deny, then the variable current_policy_action is set to deny, and the whole rule is added
 							current_policy_action = "deny"			
-				if current_policy_action != "deny" and len(result) != 0:
+				if current_policy_action != "deny" and len(matching_rules) != 0:
 					continue
-				params['action'] = 'allow'
-				result = paloalto.paloalto_rule_add(pa_ip,pa_key,params) # Add rules on Palo Alto gateway
-				paloalto.paloalto_rule_move(pa_ip,pa_key,{'location':'before','rule_name':params['name'],'dst_rule':pa_bottom_rule}) # move rule added to ensure it is above the configured pa_bottom_rule
+				pa_rule['action'] = 'allow'
+				matching_rules = paloalto.paloalto_rule_add(pa_ip,pa_key,pa_rule) # Add rules on Palo Alto gateway
+				paloalto.paloalto_rule_move(pa_ip,pa_key,{'location':'before','rule_name':pa_rule['name'],'dst_rule':pa_bottom_rule}) # move rule added to ensure it is above the configured pa_bottom_rule
 			paloalto.paloalto_commit(pa_ip,pa_key) # Commit changes on the Palo Alto gateway to save changes 
-		elif i['eventName'] == "AuthorizeSecurityGroupIngress":
-			rules_to_be_added = event_AuthorizeSecurityGroupIngress(i) # Parse security group details to retrieve new rules to be added
-			for m in rules_to_be_added:
-				params = aws_rules_to_pa(pa_ip,pa_key,m) # convert the format of the rules to Palo Alto gateway fields
-				params['srcZone'] = pa_zone_untrust
-				params['dstZone'] = pa_zone_trust
-				params['dstPort'] = str(m['dstPort'])
-				result = paloalto.paloalto_find_matchingrule(pa_ip,pa_key,params)
-				print "params: ",params
+		elif record['eventName'] == "AuthorizeSecurityGroupIngress":
+			rules_to_be_added = event_AuthorizeSecurityGroupIngress(record) # Parse security group details to retrieve new rules to be added
+			for rule in rules_to_be_added:
+				pa_rule = aws_rules_to_pa(pa_ip,pa_key,rule) # convert the format of the rules to Palo Alto gateway fields
+				pa_rule['srcZone'] = pa_zone_untrust
+				pa_rule['dstZone'] = pa_zone_trust
+				pa_rule['dstPort'] = str(rule['dstPort'])
+				result = paloalto.paloalto_find_matchingrule(pa_ip,pa_key,pa_rule)
+				print "params: ",pa_rule
 				print "result:", result
 				current_policy_action = ""
 				if len(result) != 0:
 					for rulename in result:
 						matching_rule_details = paloalto.paloalto_rule_getdetails(pa_ip,pa_key,rulename)
-						if matching_rule_details['action'] == "deny": #if we encounter one deny, then the variable current_policy_action is set to deny, and the whole rule is added
+						if matching_rule_details['action'] == "deny": #if we encounter at least one deny, then the variable current_policy_action is set to deny, and the whole rule is added
 							current_policy_action = "deny"			
 				if current_policy_action != "deny" and len(result) != 0:
 					continue
-				params['action'] = 'allow'
-				result = paloalto.paloalto_rule_add(pa_ip,pa_key,params) # Add rules on Palo Alto gateway
-				paloalto.paloalto_rule_move(pa_ip,pa_key,{'location':'before','rule_name':params['name'],'dst_rule':pa_bottom_rule}) # move rule added to ensure it is above the configured pa_bottom_rule
+				pa_rule['action'] = 'allow'
+				result = paloalto.paloalto_rule_add(pa_ip,pa_key,pa_rule) # Add rules on Palo Alto gateway
+				paloalto.paloalto_rule_move(pa_ip,pa_key,{'location':'before','rule_name':pa_rule['name'],'dst_rule':pa_bottom_rule}) # move rule added to ensure it is above the configured pa_bottom_rule
 			paloalto.paloalto_commit(pa_ip,pa_key) # Commit changes on the Palo Alto gateway to save changes
-		elif i['eventName'] == "StopInstances":
-			list_of_instances = event_StopInstances(i)
+		elif record['eventName'] == "StopInstances":
+			list_of_instances = event_StopInstances(record) # get a list of instance ids from the log event
 			for instance in list_of_instances:
-				rule_names = paloalto.paloalto_rule_findbyname(pa_ip,pa_key,instance)
-				if len(rule_names) != 0:
+				rule_names = paloalto.paloalto_rule_findbyname(pa_ip,pa_key,instance) # find all rules that have the instance id in their name (rules added by our code)
+				if len(rule_names) != 0: # delete all returned rules
 					for rule in rule_names:
 						paloalto.paloalto_rule_delete(pa_ip,pa_key,rule)
-		elif i['eventName'] == "RevokeSecurityGroupIngress":
-			sgid,params = event_RevokeSecurityGroupIngress(i)
+			paloalto.paloalto_commit(pa_ip,pa_key) # Commit changes on the Palo Alto gateway to save changes
+		elif record['eventName'] == "RevokeSecurityGroupIngress":
+			sgid,params = event_RevokeSecurityGroupIngress(record)
 			rules = paloalto.paloalto_rule_findbyname(pa_ip,pa_key,sgid)
 			for param in params:
 				if len(rules) > 0:
 					rules_to_delete = []
-					for i in rules:
-						rule_details = paloalto.paloalto_rule_getdetails(pa_ip,pa_key,i)
+					for rule in rules:
+						rule_details = paloalto.paloalto_rule_getdetails(pa_ip,pa_key,rule)
 						param['application'],param['service'] = aws_to_pa_services(pa_ip,pa_key,param['protocol'],param['dstPort'])
 						rule_details['srcIP'].sort()
 						param['srcIP'].sort()
 						if (param['srcIP'] == rule_details['srcIP'] and param['service'] == rule_details['service'] and param['application'] == rule_details['application']):
-							rules_to_delete.append(i)
+							rules_to_delete.append(rule)
 					if len(rules_to_delete) > 0:
 						for rule in rules_to_delete:
 							paloalto.paloalto_rule_delete(pa_ip,pa_key,rule)
-
+			paloalto.paloalto_commit(pa_ip,pa_key) # Commit changes on the Palo Alto gateway to save changes
 
 
 def event_AuthorizeSecurityGroupIngress(event):
@@ -150,60 +151,77 @@ def event_AuthorizeSecurityGroupIngress(event):
 	return rules_to_be_added
 
 def get_relevant_subnets(vpcs,igw_instId,vpcId):
+    # Input: 1) vpcs: object referencing list of all VPCs
+	#		 2) igw_instId: Inernet gateway instance id
+	#		 3) vpcId: relevant vpcId
+	# Output: List of all subnet Ids that use the instance igw_instId as their internet gateway
 
-    relevantSubnets = []
+	relevantSubnets = []
 
-    for i in vpcs:
-        if i.vpc_id == vpcId:
-            rtables = i.route_tables.all()
-            for j in rtables:
-                k = 0
-                for l in j.routes_attribute:
-                    if l['DestinationCidrBlock'] == "0.0.0.0/0":
-                        if 'InstanceId' in l and l['InstanceId'] == igw_instId:
-                            for k in j.associations_attribute:
-                                if k['Main'] == True:
-                                    continue
-                                else:
-                                    relevantSubnets.append(k['SubnetId'])
+	for i in vpcs:
+		if i.vpc_id == vpcId:
+			rtables = i.route_tables.all()
+			for j in rtables:
+				k = 0
+				for l in j.routes_attribute:
+					if l['DestinationCidrBlock'] == "0.0.0.0/0":
+						if 'InstanceId' in l and l['InstanceId'] == igw_instId:
+							for k in j.associations_attribute:
+								if k['Main'] == True:
+									continue
+								else:
+									relevantSubnets.append(k['SubnetId'])
 
-                        else:
-                            continue
+						else:
+							continue
 
 
-    return relevantSubnets
+	return relevantSubnets
 
 def event_StartInstance(event,igwId):
-    
+    # Input: 1) Event: 'StartInstance' log event
+	#		 2) igwId: Instance Id of the Palo Alto gateway 
+	# Output: List of rules that need to be added on the Palo Alto gateway. Each rule in  the list is a dictionary with the following parameters:
+	# 	'instID': Instance ID
+	#	'dstIP': List of relevant destination IPs
+	#	'srcIP': List of relevant source IPs
+	#	'dstPort': Destination Port for the rule
+	#	'protocol': protocol used: tcp, udp, icmp, or -1 (for all protocols).
+	
+	
+	# get a list of all VPCs 
     vpcs = ec2.vpcs.all()
     
-    instanceIds = []
-    
+	# Compile a list of all Instance Ids found in the log event passed
+	instanceIds = []
     for i in event['requestParameters']['instancesSet']['items']:
         instanceIds.append(i['instanceId'])
     
+	# Compile a list of all rules to be created. 
     rules_to_be_created = []
-    for instanceId in instanceIds:
-        instance = ec2.Instance(instanceId)
-        relevant_subnets = get_relevant_subnets(vpcs,igwId,instance.vpc_id)
-        nw = instance.network_interfaces_attribute
-        for i in nw:
-            if i['SubnetId'] in relevant_subnets:
-                for j in i['Groups']:
-                    security_group = ec2.SecurityGroup(j['GroupId'])
-                    for h in security_group.ip_permissions:
-                        if len(h['IpRanges']) != 0:
-                            dstIPs=[]
-                            srcIPs=[]
-                            for m in i['PrivateIpAddresses']:
-                                dstIPs.append(m['PrivateIpAddress'])
-                            for g in h['IpRanges']:
-                                srcIPs.append(g['CidrIp'])
-                            rules_to_be_created.append({'instID':instanceId,'dstIP':dstIPs,'srcIP':srcIPs,'dstPort':h['ToPort'],'protocol':h['IpProtocol']})
-    
-    return rules_to_be_created
+	for instanceId in instanceIds:
+		instance = ec2.Instance(instanceId)
+		relevant_subnets = get_relevant_subnets(vpcs,igwId,instance.vpc_id)
+		nw = instance.network_interfaces_attribute
+		for i in nw:
+			if i['SubnetId'] in relevant_subnets:
+				for j in i['Groups']:
+					security_group = ec2.SecurityGroup(j['GroupId'])
+					for h in security_group.ip_permissions:
+						if len(h['IpRanges']) != 0:
+							dstIPs=[]
+							srcIPs=[]
+							for m in i['PrivateIpAddresses']:
+								dstIPs.append(m['PrivateIpAddress'])
+							for g in h['IpRanges']:
+								srcIPs.append(g['CidrIp'])
+							rules_to_be_created.append({'instID':instanceId,'dstIP':dstIPs,'srcIP':srcIPs,'dstPort':h['ToPort'],'protocol':h['IpProtocol']})
+
+	return rules_to_be_created
 
 def event_StopInstances(event):
+	# Input: log event of the type 'StopInstances'
+	# Output: List of Instance Ids in that event
 	instanceIds = []
 	print "event: ",event
 	for i in event['requestParameters']['instancesSet']['items']:
