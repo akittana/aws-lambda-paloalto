@@ -12,13 +12,14 @@ ec2 = boto3.resource('ec2')
 s3 = boto3.resource('s3')
 
 def lambda_handler(event, context):
-	pa_ip = '52.5.211.189' # Palo Alto Firewall IP address
+	pa_ip = '52.6.78.209' # Palo Alto Firewall IP address
 	pa_key = 'LUFRPT1oWFBicy9ZMXpubk83aFNNSFFJV01tVVA1KzQ9eVROMTRBTmZGcTNvTkR1aS9mL1ZhQT09' # Palo Alto Access Key
 	pa_bottom_rule = 'Clean up' # Rules added by this lambda function will be placed above this rule
 	pa_zone_untrust = 'untrust' # Name of untrust (outside) zone configured in Palo Alto
 	pa_zone_trust = 'trust' # Name of trust (inside) zone configured in Palo Alto
+	pa_spg = 'strict_spg' # Name of the Security profile group to be configured in Palo Alto
 	igwId = 'i-08272b1e193f1061e' # Instance ID of the Palo Alto firewall 
-
+	
 	# Get the location of the cloudtrail log file from the event
 	bucket = event['Records'][0]['s3']['bucket']['name']
 	key = urllib.unquote_plus(event['Records'][0]['s3']['object']['key']).decode('utf8')
@@ -42,6 +43,7 @@ def lambda_handler(event, context):
 				pa_rule['srcZone'] = pa_zone_untrust
 				pa_rule['dstZone'] = pa_zone_trust				
 				pa_rule['dstPort'] = str(rule['dstPort'])
+				pa_rule['spg'] = pa_spg
 				matching_rules = paloalto.paloalto_find_matchingrule(pa_ip,pa_key,pa_rule) # find if there are already rules that correspond to the same parameters
 				current_policy_action = ""
 				if len(matching_rules) != 0: 
@@ -62,6 +64,7 @@ def lambda_handler(event, context):
 				pa_rule['srcZone'] = pa_zone_untrust
 				pa_rule['dstZone'] = pa_zone_trust
 				pa_rule['dstPort'] = str(rule['dstPort'])
+				pa_rule['spg'] = pa_spg
 				result = paloalto.paloalto_find_matchingrule(pa_ip,pa_key,pa_rule)
 				print "params: ",pa_rule
 				print "result:", result
@@ -98,6 +101,8 @@ def lambda_handler(event, context):
 						param['srcIP'].sort()
 						if (param['srcIP'] == rule_details['srcIP'] and param['service'] == rule_details['service'] and param['application'] == rule_details['application']):
 							rules_to_delete.append(rule)
+						else:
+							print "rules didnt match. rule properties: ",param,rule_details
 					if len(rules_to_delete) > 0:
 						for rule in rules_to_delete:
 							paloalto.paloalto_rule_delete(pa_ip,pa_key,rule)
@@ -105,12 +110,19 @@ def lambda_handler(event, context):
 
 
 def event_AuthorizeSecurityGroupIngress(event):
+    # Input: 1) Event: 'AuthorizeSecurityGroupIngress' log event
+	# Output: List of rules that need to be added on the Palo Alto gateway. Each rule in  the list is a dictionary with the following parameters:
+	# 	'instID': Instance ID
+	#	'dstIP': List of relevant destination IPs
+	#	'srcIP': List of relevant source IPs
+	#	'dstPort': Destination Port for the rule
+	#	'protocol': protocol used: tcp, udp, icmp, or -1 (for all protocols).
+	
 	security_group = event['requestParameters']['groupId']
-	ec2 = boto3.resource('ec2')
 	nw_ifs = ec2.network_interfaces.all()
 	sg = ec2.SecurityGroup(event['requestParameters']['groupId'])
 	vpc = ec2.Vpc(sg.vpc_id)
-	print "CIDR block:",vpc.cidr_block
+	
 	
 	rules = []
 	rules_to_be_added =[]
@@ -179,7 +191,7 @@ def get_relevant_subnets(vpcs,igw_instId,vpcId):
 	return relevantSubnets
 
 def event_StartInstance(event,igwId):
-    # Input: 1) Event: 'StartInstance' log event
+	# Input: 1) Event: 'StartInstance' log event
 	#		 2) igwId: Instance Id of the Palo Alto gateway 
 	# Output: List of rules that need to be added on the Palo Alto gateway. Each rule in  the list is a dictionary with the following parameters:
 	# 	'instID': Instance ID
@@ -187,35 +199,44 @@ def event_StartInstance(event,igwId):
 	#	'srcIP': List of relevant source IPs
 	#	'dstPort': Destination Port for the rule
 	#	'protocol': protocol used: tcp, udp, icmp, or -1 (for all protocols).
-	
-	
+
+
 	# get a list of all VPCs 
-    vpcs = ec2.vpcs.all()
-    
+	vpcs = ec2.vpcs.all()
+
 	# Compile a list of all Instance Ids found in the log event passed
 	instanceIds = []
-    for i in event['requestParameters']['instancesSet']['items']:
-        instanceIds.append(i['instanceId'])
-    
+	for i in event['requestParameters']['instancesSet']['items']:
+		instanceIds.append(i['instanceId'])
+
 	# Compile a list of all rules to be created. 
-    rules_to_be_created = []
+	rules_to_be_created = []
 	for instanceId in instanceIds:
 		instance = ec2.Instance(instanceId)
+		vpc = ec2.Vpc(instance.vpc_id)
 		relevant_subnets = get_relevant_subnets(vpcs,igwId,instance.vpc_id)
-		nw = instance.network_interfaces_attribute
-		for i in nw:
-			if i['SubnetId'] in relevant_subnets:
-				for j in i['Groups']:
-					security_group = ec2.SecurityGroup(j['GroupId'])
-					for h in security_group.ip_permissions:
-						if len(h['IpRanges']) != 0:
+		inst_nw_ifs = instance.network_interfaces_attribute
+		for nw_if in inst_nw_ifs:
+			if nw_if['SubnetId'] in relevant_subnets:
+				for sg in nw_if['Groups']:
+					security_group = ec2.SecurityGroup(sg['GroupId'])
+					for rule in security_group.ip_permissions:
+						if len(rule['IpRanges']) != 0:
 							dstIPs=[]
 							srcIPs=[]
-							for m in i['PrivateIpAddresses']:
+							for source in rule['IpRanges']:
+								if "/" in source['CidrIp']:
+									if netaddr.IPNetwork(source['CidrIp']) in netaddr.IPNetwork(vpc.cidr_block):
+										continue
+								else:
+									if netaddr.IPAddress(source['CidrIp']) in netaddr.IPNetwork(vpc.cidr_block):
+										continue
+								srcIPs.append(source['CidrIp'])
+							if len(srcIPs) == 0:
+								continue
+							for m in nw_if['PrivateIpAddresses']:
 								dstIPs.append(m['PrivateIpAddress'])
-							for g in h['IpRanges']:
-								srcIPs.append(g['CidrIp'])
-							rules_to_be_created.append({'instID':instanceId,'dstIP':dstIPs,'srcIP':srcIPs,'dstPort':h['ToPort'],'protocol':h['IpProtocol']})
+							rules_to_be_created.append({'instID':instanceId,'dstIP':dstIPs,'srcIP':srcIPs,'dstPort':rule['ToPort'],'protocol':rule['IpProtocol']})
 
 	return rules_to_be_created
 
