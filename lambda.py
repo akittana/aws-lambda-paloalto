@@ -12,8 +12,13 @@ ec2 = boto3.resource('ec2')
 s3 = boto3.resource('s3')
 
 def lambda_handler(event, context):
+<<<<<<< HEAD
 	pa_ip = '52.6.78.209' # Palo Alto Firewall IP address
 	pa_key = 'LUFRPT1oWFBicy9ZMXpubk83aFNNSFFJV01tVVA1KzQ9eVROMTRBTmZGcTNvTkR1aS9mL1ZhQT09' # Palo Alto Access Key
+=======
+	pa_ip = '1.1.1.1' # Palo Alto Firewall IP address
+	pa_key = 'LUFRPT1oWFBicy9ZMXpubk83aFNNSFFJV01tVVA1KzQ9eVROMTRBTmZGcTNT09' # Palo Alto Access Key
+>>>>>>> origin/master
 	pa_bottom_rule = 'Clean up' # Rules added by this lambda function will be placed above this rule
 	pa_zone_untrust = 'untrust' # Name of untrust (outside) zone configured in Palo Alto
 	pa_zone_trust = 'trust' # Name of trust (inside) zone configured in Palo Alto
