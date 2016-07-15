@@ -39,5 +39,5 @@ Code Features/Design
 
  * Cleaning up
  When instances are stopped or rules in security groups are removed, we want any rules that we added to be removed. To avoid removing any permanent rules added by the security administrator, the code will only remove rules that it added previously to the rule base (This is can be controlled using the naming). The following events are monitored as triggers:
-   * StopInstances: An instance was stopped.
-   * RevokeSecurityGroupIngress: A rule was removed from a security group.
+  * StopInstances: An instance was stopped.
+  * RevokeSecurityGroupIngress: A rule was removed from a security group.
