@@ -12,13 +12,10 @@ ec2 = boto3.resource('ec2')
 s3 = boto3.resource('s3')
 
 def lambda_handler(event, context):
-<<<<<<< HEAD
-	pa_ip = '52.6.78.209' # Palo Alto Firewall IP address
-	pa_key = 'LUFRPT1oWFBicy9ZMXpubk83aFNNSFFJV01tVVA1KzQ9eVROMTRBTmZGcTNvTkR1aS9mL1ZhQT09' # Palo Alto Access Key
-=======
+
+
 	pa_ip = '1.1.1.1' # Palo Alto Firewall IP address
 	pa_key = 'LUFRPT1oWFBicy9ZMXpubk83aFNNSFFJV01tVVA1KzQ9eVROMTRBTmZGcTNT09' # Palo Alto Access Key
->>>>>>> origin/master
 	pa_bottom_rule = 'Clean up' # Rules added by this lambda function will be placed above this rule
 	pa_zone_untrust = 'untrust' # Name of untrust (outside) zone configured in Palo Alto
 	pa_zone_trust = 'trust' # Name of trust (inside) zone configured in Palo Alto
@@ -255,6 +252,9 @@ def event_StopInstances(event):
 	return instanceIds
 
 def event_RevokeSecurityGroupIngress(event):
+	# Input: log event of the type 'RevokeSecurityGroupIngress'
+	# Output: security group Id from the event as well as list of rules removed
+	
     security_group = event['requestParameters']['groupId']
     rules = []
     for i in event['requestParameters']['ipPermissions']['items']:
@@ -274,6 +274,10 @@ def event_RevokeSecurityGroupIngress(event):
     return security_group,rules 
 
 def aws_to_pa_services(pa_ip,pa_key,protocol,port):
+	# convert port and protocol from an aws rule to service and application to be used in Palo Alto
+	# Input: Palo Alto IP, Access Key, Protocol Type, Port number
+	# output: application name, service
+	
     if protocol == 'icmp':
         return 'icmp', 'application-default'
     elif protocol == 'tcp':
@@ -316,6 +320,9 @@ def aws_to_pa_services(pa_ip,pa_key,protocol,port):
         return 'any','any'
     
 def aws_rules_to_pa(pa_ip,pa_key,aws_params):
+	# convert rules read from AWS to rules to be used for Palo Atlo 
+	# Input: Palo Alto IP, Access Key, rule parameters (from AWS)
+	# Output: rule parameters to be used in Palo Alto
 	pa_params={}
 	
 	pa_params['name'] = aws_params['instID']
